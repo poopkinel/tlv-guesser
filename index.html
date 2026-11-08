@@ -258,27 +258,42 @@ async function ensureGoogle(){
   svService=new SV.StreetViewService();
 }
 // בדיקת Metadata חינמית: האם יש תמונה של Google ליד הנקודה
+// כל בקשה מקבלת זמן מוגבל, כדי שהמשחק לא ייתקע אם Google לא עונה
+const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(Object.assign(new Error('TIMEOUT'),{code:'TIMEOUT'})),ms))]);
+let lastStatus='';
+class LookupError extends Error{}
 async function lookup(lat,lng){
   if(metaViaFetch){
     try{
-      const r=await fetch(`https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&radius=${CONFIG.SEARCH_RADIUS_M}&source=outdoor&key=${encodeURIComponent(KEY)}`);
+      const r=await withTimeout(fetch(`https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&radius=${CONFIG.SEARCH_RADIUS_M}&source=outdoor&key=${encodeURIComponent(KEY)}`),6000);
       const j=await r.json();
+      lastStatus='metadata '+j.status;
       if(j.status==='OK')return {pano:j.pano_id,lat:j.location.lat,lng:j.location.lng,copy:j.copyright||''};
       if(j.status==='ZERO_RESULTS'||j.status==='NOT_FOUND')return null;
       metaViaFetch=false; // למשל Street View Static API לא מופעל במפתח
       console.warn('Street View metadata:',j.status,j.error_message||'');
-    }catch(e){metaViaFetch=false;console.warn('Street View metadata fetch failed, using StreetViewService',e)}
+    }catch(e){metaViaFetch=false;lastStatus='metadata '+(e.code||e.message);console.warn('Street View metadata failed, using StreetViewService',e)}
   }
   try{
     const req={location:{lat,lng},radius:CONFIG.SEARCH_RADIUS_M,preference:SV.StreetViewPreference.NEAREST};
     if(SV.StreetViewSource.GOOGLE)req.sources=[SV.StreetViewSource.GOOGLE];else req.source=SV.StreetViewSource.OUTDOOR;
-    const {data}=await svService.getPanorama(req);
+    const {data}=await withTimeout(svService.getPanorama(req),8000);
+    lastStatus='service OK';
     const ll=data.location.latLng;return {pano:data.location.pano,lat:ll.lat(),lng:ll.lng(),copy:data.copyright||'Google'};
-  }catch(e){return null}
+  }catch(e){
+    const code=String(e?.code||e?.message||'UNKNOWN');lastStatus='service '+code;
+    if(/ZERO_RESULTS/.test(code))return null;
+    console.warn('getPanorama failed:',code,e);
+    if(/TIMEOUT/.test(code))return 'timeout';
+    throw new LookupError(code);   // REQUEST_DENIED, OVER_QUERY_LIMIT וכו': אין טעם להמשיך לנסות
+  }
 }
 async function findLocation(avoid){
+  let timeouts=0;
   for(let t=0;t<CONFIG.MAX_TRIES;t++){
+    $('loadingText').textContent=`מחפש נקודה בעיר… (${t+1}/${CONFIG.MAX_TRIES})`;
     const p=randomPoint();const m=await lookup(p.lat,p.lng);
+    if(m==='timeout'){if(++timeouts>=3)throw new LookupError('TIMEOUT');continue}
     if(!m||!inside(m.lat,m.lng)||!/google/i.test(m.copy))continue;
     if(avoid.some(a=>haversine(a,m)<300))continue;
     m.tries=t+1;return m;
@@ -334,8 +349,17 @@ async function startGame(){
 async function nextRound(){
   if(remaining()<=0){track('daily_limit_reached');loading(false);toast('נגמרו התמונות להיום בדפדפן הזה.');return game.results.length?summary():(showScreen('start'),renderQuota())}
   loading(true,'מחפש נקודה בעיר…');
-  const loc=await findLocation(game.results.map(r=>r.loc));
-  if(!loc)return fatal('לא מצאתי תמונת רחוב אחרי כמה ניסיונות. נסו שוב.','no_location');
+  let loc;
+  try{loc=await findLocation(game.results.map(r=>r.loc))}
+  catch(e){
+    const code=e.message;
+    const why=code==='REQUEST_DENIED'?'Google דחתה את הבקשה. בדקו שהכתובת של האתר (כולל http:// אם אין עדיין HTTPS) מורשית במגבלות המפתח.'
+      :code==='OVER_QUERY_LIMIT'?'המכסה של Google נגמרה להיום.'
+      :code==='TIMEOUT'?'Google לא עונה. בדקו את החיבור ונסו שוב.'
+      :'Google החזירה שגיאה.';
+    return fatal(`${why} (קוד: ${code})`,'lookup_'+code);
+  }
+  if(!loc)return fatal(`לא מצאתי תמונת רחוב אחרי ${CONFIG.MAX_TRIES} ניסיונות. נסו שוב. (סטטוס אחרון: ${lastStatus})`,'no_location');
   bumpUsage();game.cur=loc;
   track('panorama_load',{round:game.i+1,mode:game.mode,lookups:loc.tries,lookup_method:metaViaFetch?'metadata':'service'});
   showPano(loc);
