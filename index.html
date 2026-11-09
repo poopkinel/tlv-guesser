@@ -107,6 +107,18 @@ td,th{padding:7px 0;border-bottom:1px solid var(--line);text-align:right}
 th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
 .num{text-align:left;font-variant-numeric:tabular-nums}
 .total{font-family:var(--display);font-size:64px;line-height:.9;font-variant-numeric:tabular-nums}
+.lb{display:flex;flex-direction:column;gap:6px}
+.lb ol{list-style:none;margin:0;padding:0}
+.lb li{display:grid;grid-template-columns:3ch minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.lb li .rk{font-family:var(--display);font-size:20px;line-height:1;color:var(--muted)}
+.lb li:nth-child(1) .rk{color:var(--sun)}
+.lb li.me{font-weight:700}.lb li.me .rk,.lb li.me .sc{color:var(--accent)}
+.lb .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lb .md{font-size:11px;color:var(--muted);font-weight:400;margin-inline-start:6px}
+.lb .sc{font-weight:600}
+.submit{display:flex;gap:8px}
+#nameInput{flex:1;min-width:0;font:inherit;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink)}
+#nameInput:focus-visible{outline:3px solid var(--sun);outline-offset:1px}
 
 .loading{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:color-mix(in srgb,var(--plaster) 85%,transparent);font-weight:600}
 .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:0 auto 10px}
@@ -151,6 +163,7 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
     <div class="quota" id="quota"></div>
     <p class="err" id="startErr" hidden></p>
     <button class="btn primary" id="startBtn" type="button">התחלת משחק</button>
+    <div class="lb" id="lbStart" hidden><div class="eyebrow">טבלת השיאים</div><ol id="lbStartList"></ol></div>
   </div>
 </section>
 
@@ -178,7 +191,13 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
       <div style="text-align:left"><div class="pts" id="sRank"></div><div class="quota" id="sBest"></div></div>
     </div>
     <table><thead><tr><th>סיבוב</th><th class="num">מרחק</th><th class="num">נקודות</th></tr></thead><tbody id="sRows"></tbody></table>
+    <form class="submit" id="submitRow" hidden>
+      <input id="nameInput" maxlength="20" placeholder="השם שלכם לטבלה" autocomplete="nickname" aria-label="שם לטבלת השיאים">
+      <button class="btn" id="submitBtn" type="submit">שמירה בטבלה</button>
+    </form>
+    <p class="quota" id="submitMsg" hidden></p>
     <button class="btn primary" id="againBtn" type="button">משחק חדש</button>
+    <div class="lb" id="lbSum" hidden><div class="eyebrow">טבלת השיאים</div><ol id="lbSumList"></ol></div>
   </div>
 </section>
 
@@ -195,7 +214,10 @@ const CONFIG = {
   SEARCH_RADIUS_M: 120,          // רדיוס חיפוש תמונה סביב נקודה אקראית
   SCORE_FALLOFF_M: 1200,         // כמה מהר יורד הניקוד עם המרחק
   MAX_TRIES: 25,                 // ניסיונות למצוא נקודה עם תמונה בכל סיבוב (בדיקות Metadata חינמיות)
-  GA_MEASUREMENT_ID: ""          // מזהה Google Analytics 4, למשל "G-XXXXXXXXXX". אם ריק, לא נאסף כלום
+  GA_MEASUREMENT_ID: "",         // מזהה Google Analytics 4, למשל "G-XXXXXXXXXX". אם ריק, לא נאסף כלום
+  // טבלת שיאים: ההגדרות מ-Firebase (Project settings > Your apps > Web app). אם ריק, הטבלה מוסתרת
+  FIREBASE: { apiKey: "", authDomain: "", projectId: "", appId: "" },
+  LEADERBOARD_SIZE: 10
 };
 
 // ===================== אנליטיקס =====================
@@ -407,17 +429,73 @@ function summary(){
   game.results.forEach(r=>{const a=[r.g.lat,r.g.lng],b=[r.loc.lat,r.loc.lng];layers.push(link(a,b),guessDot(a),trueDot(b));pts.push(a,b)});
   sLayer=L.layerGroup(layers).addTo(smap);smap.fitBounds(L.latLngBounds(pts),{padding:[50,50],maxZoom:16});
   renderQuota();
+  // טבלת שיאים: רק משחק מלא אפשר לשמור
+  $('submitMsg').hidden=true;
+  const canSubmit=lbOn()&&game.results.length===CONFIG.ROUNDS&&!game.submitted;
+  $('submitRow').hidden=!canSubmit;$('submitBtn').disabled=false;
+  if(canSubmit){try{$('nameInput').value=localStorage.getItem('tlvg-name')||''}catch(e){}}
+  showLB('lbSum','lbSumList');
+}
+
+// ===================== טבלת שיאים (Firebase Firestore) =====================
+const lbOn=()=>!!(CONFIG.FIREBASE&&CONFIG.FIREBASE.apiKey&&CONFIG.FIREBASE.projectId);
+let fb=null;
+async function ensureFB(){
+  if(fb)return fb;
+  const V='10.12.2';
+  const [{initializeApp},fs]=await Promise.all([
+    import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
+    import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`)
+  ]);
+  fb={db:fs.getFirestore(initializeApp(CONFIG.FIREBASE)),fs};
+  return fb;
+}
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const lbMsg=t=>`<li><span class="rk"></span><span class="nm">${t}</span><span></span></li>`;
+async function showLB(wrapId,listId,meId){
+  if(!lbOn())return;
+  $(wrapId).hidden=false;$(listId).innerHTML=lbMsg('טוען…');
+  try{
+    const {db,fs}=await ensureFB();
+    const snap=await fs.getDocs(fs.query(fs.collection(db,'scores'),fs.orderBy('score','desc'),fs.limit(CONFIG.LEADERBOARD_SIZE)));
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
+    $(listId).innerHTML=rows.length?rows.map((r,i)=>`<li class="${r.id===meId?'me':''}"><span class="rk">${i+1}</span><span class="nm">${esc(r.name)}<span class="md">${r.mode==='move'?'עם תזוזה':'בלי תזוזה'}</span></span><span class="sc">${fmt(r.score)}</span></li>`).join('')
+      :lbMsg('עוד אין תוצאות. היו הראשונים.');
+  }catch(e){console.warn('leaderboard load failed',e);$(listId).innerHTML=lbMsg('לא הצלחתי לטעון את הטבלה.')}
+}
+async function submitScore(ev){
+  ev.preventDefault();
+  const name=$('nameInput').value.replace(/\s+/g,' ').trim().slice(0,20);
+  if(!name){$('nameInput').focus();return}
+  try{localStorage.setItem('tlvg-name',name)}catch(e){}
+  $('submitBtn').disabled=true;
+  try{
+    const {db,fs}=await ensureFB();
+    const col=fs.collection(db,'scores');
+    const ref=await fs.addDoc(col,{name,score:game.total,mode:game.mode,createdAt:fs.serverTimestamp()});
+    game.submitted=true;$('submitRow').hidden=true;
+    let rank=null;
+    try{rank=(await fs.getCountFromServer(fs.query(col,fs.where('score','>',game.total)))).data().count+1}catch(e){}
+    $('submitMsg').textContent=rank?`נשמר! אתם במקום ${fmt(rank)} בטבלה.`:'נשמר!';$('submitMsg').hidden=false;
+    track('leaderboard_submit',{score:game.total,mode:game.mode,rank:rank||0});
+    showLB('lbSum','lbSumList',ref.id);
+  }catch(e){
+    console.warn('leaderboard submit failed',e);$('submitBtn').disabled=false;
+    $('submitMsg').textContent='השמירה נכשלה. נסו שוב.';$('submitMsg').hidden=false;
+  }
 }
 
 // ===================== אירועים =====================
+$('submitRow').addEventListener('submit',submitScore);
 $('startBtn').onclick=startGame;
 $('guessBtn').onclick=makeGuess;
 $('nextBtn').onclick=()=>{game.i++;if(game.i<CONFIG.ROUNDS)nextRound();else summary()};
-$('againBtn').onclick=()=>{showScreen('start');renderQuota()};
+$('againBtn').onclick=()=>{showScreen('start');renderQuota();showLB('lbStart','lbStartList')};
 $('mapToggle').onclick=()=>{const b=$('guessbox');b.classList.toggle('open');$('mapToggle').textContent=b.classList.contains('open')?'סגירת מפה':'פתיחת מפה';if(gmap)setTimeout(()=>gmap.invalidateSize(),0)};
 $('backStart').onclick=()=>{if(pano&&game?.cur){pano.setPano(game.cur.pano);pano.setPov({heading:pano.getPov().heading,pitch:0})}};
 document.addEventListener('keydown',e=>{if(e.key===' '&&!$('guessbox').hidden&&guess&&document.activeElement.tagName!=='BUTTON'){e.preventDefault();makeGuess()}});
 renderQuota();
+showLB('lbStart','lbStartList');
 </script>
 </body>
 </html>

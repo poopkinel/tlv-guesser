@@ -1,0 +1,31 @@
+rules_version = '2';
+// כללי אבטחה לטבלת השיאים של תל אביב גסר.
+// מעתיקים את כל הקובץ ל-Firebase Console > Firestore Database > Rules ולוחצים Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /scores/{scoreId} {
+      // כולם יכולים לקרוא את הטבלה
+      allow read: if true;
+
+      // אפשר רק להוסיף תוצאה חדשה, ורק בפורמט תקין
+      allow create: if request.resource.data.keys().hasOnly(['name', 'score', 'mode', 'createdAt'])
+        && request.resource.data.keys().hasAll(['name', 'score', 'mode', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 20
+        && request.resource.data.score is int
+        && request.resource.data.score >= 0
+        && request.resource.data.score <= 25000
+        && request.resource.data.mode in ['still', 'move']
+        && request.resource.data.createdAt == request.time;
+
+      // אי אפשר לשנות או למחוק תוצאות מהאתר
+      allow update, delete: if false;
+    }
+
+    // כל שאר המסד סגור
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
