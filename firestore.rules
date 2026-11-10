@@ -1,8 +1,13 @@
 rules_version = '2';
+// הביטוי הזה זהה ל-BAD_RX ב-index.html: מילים פוגעניות, קישורים ומספרי טלפון
 // כללי אבטחה לטבלת השיאים של תל אביב גסר.
 // מעתיקים את כל הקובץ ל-Firebase Console > Firestore Database > Rules ולוחצים Publish.
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isClean(t) {
+      return !t.lower().matches('.*((^|[^א-ת])[והבלשכ]{0,2}(זונה|זונות|בן\\s*זונה|בת\\s*זונה|שרמוטה|שרמוטות|שרמוט|שרמוטים|כוס\\s*אמא|כוס\\s*אמק|כוס\\s*אמאשך|כוס\\s*אמך|כוסעמק|כוס\\s*עמק|כוסית|כוסיות|מזדיין|מזדיינת|מזדיינים|לזיין|זיון|זיונים|זין\\s*שלי|על\\s*הזין|מניאק|מניאקית|מניאקים|חרא|חארות|יא\\s*חרא|בן\\s*כלב|בת\\s*כלב|קוקסינל|קוקסינלים|ערבוש|ערבושים|כושי|כושים|כושית|מפגר|מפגרת|מפגרים|פרענק|פרענקים|ערס\\s*מסריח|דוס\\s*מסריח|תמות|שתמות|תמותו|שתמותו|אני\\s*ארצח|ארצח\\s*אותך|נרצח\\s*אותך)($|[^א-ת])|(^|[^א-ת])[והבלשכ]{0,2}(מוות\\s*ל)|\\b(fuck|shit|cunt|bitch|whore|slut|nigg|fagg|retard|asshole|motherf|rapist)[a-z]*\\b|\\b(fag|fags|dick|dicks|pussy|cock|cocks|rape|raped|kys|kill\\s*yourself)\\b|https?:|www\\.|\\.(com|net|org|il|io|ly|me|gg)\\b|[0-9][0-9 .\\-]{5,}[0-9]|t\\.me/|@[a-z0-9_]{4,}).*');
+    }
+
     match /scores/{scoreId} {
       // כולם יכולים לקרוא את הטבלה
       allow read: if true;
@@ -13,6 +18,7 @@ service cloud.firestore {
         && request.resource.data.name is string
         && request.resource.data.name.size() >= 1
         && request.resource.data.name.size() <= 20
+        && isClean(request.resource.data.name)
         && request.resource.data.score is int
         && request.resource.data.score >= 0
         && request.resource.data.score <= 25000
@@ -35,6 +41,8 @@ service cloud.firestore {
         && request.resource.data.message is string
         && request.resource.data.message.size() >= 1
         && request.resource.data.message.size() <= 80
+        && isClean(request.resource.data.name)
+        && isClean(request.resource.data.message)
         && request.resource.data.pano is string
         && request.resource.data.pano.size() >= 10
         && request.resource.data.pano.size() <= 200
@@ -47,7 +55,11 @@ service cloud.firestore {
         && request.resource.data.dist <= 100
         && request.resource.data.createdAt == request.time;
 
-      allow update, delete: if false;
+      // דיווח: אפשר רק להעלות את מונה הדיווחים ב-1
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reports'])
+        && request.resource.data.reports is int
+        && request.resource.data.reports == resource.data.get('reports', 0) + 1;
+      allow delete: if false;
     }
 
     // כל שאר המסד סגור

@@ -131,6 +131,9 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
 .egg input{font:inherit;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);min-width:0}
 .egg input:focus-visible{outline:3px solid var(--sun);outline-offset:1px}
 .egg p{margin:0}
+.eggmsg{display:flex;flex-direction:column;gap:6px}
+.linkbtn{font:inherit;font-size:12px;color:var(--muted);background:none;border:0;padding:0;text-decoration:underline;cursor:pointer}
+.linkbtn:focus-visible{outline:2px solid var(--sun);outline-offset:2px}
 
 .loading{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:color-mix(in srgb,var(--plaster) 85%,transparent);font-weight:600}
 .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:0 auto 10px}
@@ -470,6 +473,16 @@ function summary(){
   showLB('lbSum','lbSumList');
 }
 
+// ===================== סינון תוכן =====================
+// אותו ביטוי נמצא גם ב-firestore.rules, כך שאי אפשר לעקוף אותו מהדפדפן
+const BAD_RX=new RegExp("(^|[^א-ת])[והבלשכ]{0,2}(זונה|זונות|בן\\s*זונה|בת\\s*זונה|שרמוטה|שרמוטות|שרמוט|שרמוטים|כוס\\s*אמא|כוס\\s*אמק|כוס\\s*אמאשך|כוס\\s*אמך|כוסעמק|כוס\\s*עמק|כוסית|כוסיות|מזדיין|מזדיינת|מזדיינים|לזיין|זיון|זיונים|זין\\s*שלי|על\\s*הזין|מניאק|מניאקית|מניאקים|חרא|חארות|יא\\s*חרא|בן\\s*כלב|בת\\s*כלב|קוקסינל|קוקסינלים|ערבוש|ערבושים|כושי|כושים|כושית|מפגר|מפגרת|מפגרים|פרענק|פרענקים|ערס\\s*מסריח|דוס\\s*מסריח|תמות|שתמות|תמותו|שתמותו|אני\\s*ארצח|ארצח\\s*אותך|נרצח\\s*אותך)($|[^א-ת])|(^|[^א-ת])[והבלשכ]{0,2}(מוות\\s*ל)|\\b(fuck|shit|cunt|bitch|whore|slut|nigg|fagg|retard|asshole|motherf|rapist)[a-z]*\\b|\\b(fag|fags|dick|dicks|pussy|cock|cocks|rape|raped|kys|kill\\s*yourself)\\b|https?:|www\\.|\\.(com|net|org|il|io|ly|me|gg)\\b|[0-9][0-9 .\\-]{5,}[0-9]|t\\.me/|@[a-z0-9_]{4,}");
+function normText(t){
+  return String(t||'').normalize('NFKC').toLowerCase()
+    .replace(/[\u0591-\u05C7\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g,'')   // ניקוד וסימני כיוון נסתרים
+    .replace(/(.)\1{2,}/g,'$1');                                                      // זוווונה -> זונה
+}
+const isClean=t=>!BAD_RX.test(normText(t))&&!BAD_RX.test(String(t||'').toLowerCase());
+
 // ===================== טבלת שיאים (Firebase Firestore) =====================
 const lbOn=()=>!!(CONFIG.FIREBASE&&CONFIG.FIREBASE.apiKey&&CONFIG.FIREBASE.projectId);
 let fb=null;
@@ -492,7 +505,7 @@ async function showLB(wrapId,listId,meId){
     const {db,fs}=await ensureFB();
     const snap=await fs.getDocs(fs.query(fs.collection(db,'scores'),fs.orderBy('score','desc'),fs.limit(CONFIG.LEADERBOARD_SIZE)));
     const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
-    $(listId).innerHTML=rows.length?rows.map((r,i)=>`<li class="${r.id===meId?'me':''}"><span class="rk">${i+1}</span><span class="nm">${esc(r.name)}<span class="md">${r.mode==='move'?'עם תזוזה':'בלי תזוזה'}</span></span><span class="sc">${fmt(r.score)}</span></li>`).join('')
+    $(listId).innerHTML=rows.length?rows.map((r,i)=>`<li class="${r.id===meId?'me':''}"><span class="rk">${i+1}</span><span class="nm">${isClean(r.name)?esc(r.name):'שם הוסתר'}<span class="md">${r.mode==='move'?'עם תזוזה':'בלי תזוזה'}</span></span><span class="sc">${fmt(r.score)}</span></li>`).join('')
       :lbMsg('עוד אין תוצאות. היו הראשונים.');
     const me=$(listId).querySelector('.me');if(me)me.scrollIntoView({block:'nearest'});
   }catch(e){console.warn('leaderboard load failed',e);$(listId).innerHTML=lbMsg('לא הצלחתי לטעון את הטבלה.')}
@@ -501,6 +514,7 @@ async function submitScore(ev){
   ev.preventDefault();
   const name=$('nameInput').value.replace(/\s+/g,' ').trim().slice(0,20);
   if(!name){$('nameInput').focus();return}
+  if(!isClean(name)){$('submitMsg').textContent='השם הזה לא עובר את הסינון. נסו שם אחר.';$('submitMsg').hidden=false;$('nameInput').focus();return}
   try{localStorage.setItem('tlvg-name',name)}catch(e){}
   $('submitBtn').disabled=true;
   try{
@@ -533,7 +547,9 @@ async function loadEggs(){
   try{
     const {db,fs}=await ensureFB();
     const snap=await fs.getDocs(fs.query(fs.collection(db,'eggs'),fs.orderBy('createdAt','desc'),fs.limit(CONFIG.EGG_FETCH)));
-    eggCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+    const hidden=new Set(readList('tlvg-eggs-hidden'));
+    eggCache=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(e=>!hidden.has(e.id)&&(e.reports||0)<2&&isClean(e.name)&&isClean(e.message));
   }catch(e){console.warn('eggs load failed',e);eggCache=[]}
   return eggCache;
 }
@@ -559,7 +575,7 @@ function renderEggBox(loc,d){
     if(d<=CONFIG.EGG_REVEAL_M){
       markEggs(here.map(e=>e.id));track('egg_revealed',{count:n});
       html+=`<h3>${EGG_SVG}${n>1?'מסרים שהושארו כאן':'מסר שהושאר כאן'}</h3>`+
-        here.map(e=>`<blockquote>${esc(e.message)}</blockquote><cite>${esc(e.name)}, שניחש ${fmtD(e.dist||0)} מהמקום</cite>`).join('');
+        here.map(e=>`<div class="eggmsg" data-id="${esc(e.id)}"><blockquote>${esc(e.message)}</blockquote><cite>${esc(e.name)}, שניחש ${fmtD(e.dist||0)} מהמקום · <button class="linkbtn" type="button" data-report="${esc(e.id)}">דיווח על מסר פוגעני</button></cite></div>`).join('');
     }else{
       html+=`<h3>${EGG_SVG}המסר נשאר נעול</h3><p class="quota">${esc(here[0].name)}${n>1?` ועוד ${n-1}`:''} השאיר${n>1?'ו':''} כאן מסר. צריך לנחש עד ${fmt(CONFIG.EGG_REVEAL_M)} מטר כדי לקרוא אותו.</p>`;
     }
@@ -573,6 +589,16 @@ function renderEggBox(loc,d){
   }
   $('eggBox').innerHTML=html;$('eggBox').hidden=!html;
   const f=$('eggForm');if(f)f.addEventListener('submit',ev=>leaveEgg(ev,loc,d));
+  $('eggBox').querySelectorAll('[data-report]').forEach(b=>b.addEventListener('click',()=>reportEgg(b.dataset.report)));
+}
+async function reportEgg(id){
+  writeList('tlvg-eggs-hidden',[...readList('tlvg-eggs-hidden'),id]);
+  const box=$('eggBox').querySelector(`.eggmsg[data-id="${CSS.escape(id)}"]`);
+  if(box)box.innerHTML='<p class="quota">תודה. המסר הוסתר אצלכם, ואחרי שני דיווחים הוא יוסתר לכולם.</p>';
+  if(eggCache)eggCache=eggCache.filter(e=>e.id!==id);
+  track('egg_reported');
+  try{const {db,fs}=await ensureFB();await fs.updateDoc(fs.doc(db,'eggs',id),{reports:fs.increment(1)})}
+  catch(e){console.warn('report failed',e)}
 }
 async function leaveEgg(ev,loc,d){
   ev.preventDefault();
@@ -580,6 +606,7 @@ async function leaveEgg(ev,loc,d){
   const message=$('eggMsg').value.replace(/\s+/g,' ').trim().slice(0,80);
   if(!name)return $('eggName').focus();
   if(!message)return $('eggMsg').focus();
+  if(!isClean(name)||!isClean(message)){$('eggStatus').textContent='המסר או השם לא עוברים את הסינון. נסו לנסח אחרת.';$('eggStatus').hidden=false;return}
   try{localStorage.setItem('tlvg-name',name)}catch(e){}
   $('eggBtn').disabled=true;
   try{
