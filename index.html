@@ -108,7 +108,7 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
 .num{text-align:left;font-variant-numeric:tabular-nums}
 .total{font-family:var(--display);font-size:64px;line-height:.9;font-variant-numeric:tabular-nums}
 .lb{display:flex;flex-direction:column;gap:6px}
-.lb ol{list-style:none;margin:0;padding:0}
+.lb ol{list-style:none;margin:0;padding:0;max-height:min(45vh,420px);overflow-y:auto;overscroll-behavior:contain}
 .lb li{display:grid;grid-template-columns:3ch minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 .lb li .rk{font-family:var(--display);font-size:20px;line-height:1;color:var(--muted)}
 .lb li:nth-child(1) .rk{color:var(--sun)}
@@ -222,7 +222,7 @@ const CONFIG = {
     projectId: "tlv-guesser",
     appId: "1:776729510310:web:1617ce2a052ac297a80f67"
   },
-  LEADERBOARD_SIZE: 10
+  LEADERBOARD_SIZE: 100
 };
 
 // ===================== אנליטיקס =====================
@@ -466,6 +466,7 @@ async function showLB(wrapId,listId,meId){
     const rows=snap.docs.map(d=>({id:d.id,...d.data()}));
     $(listId).innerHTML=rows.length?rows.map((r,i)=>`<li class="${r.id===meId?'me':''}"><span class="rk">${i+1}</span><span class="nm">${esc(r.name)}<span class="md">${r.mode==='move'?'עם תזוזה':'בלי תזוזה'}</span></span><span class="sc">${fmt(r.score)}</span></li>`).join('')
       :lbMsg('עוד אין תוצאות. היו הראשונים.');
+    const me=$(listId).querySelector('.me');if(me)me.scrollIntoView({block:'nearest'});
   }catch(e){console.warn('leaderboard load failed',e);$(listId).innerHTML=lbMsg('לא הצלחתי לטעון את הטבלה.')}
 }
 async function submitScore(ev){
