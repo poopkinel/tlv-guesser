@@ -119,6 +119,18 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
 .submit{display:flex;gap:8px}
 #nameInput{flex:1;min-width:0;font:inherit;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink)}
 #nameInput:focus-visible{outline:3px solid var(--sun);outline-offset:1px}
+/* Easter eggs: messages left by players who guessed a spot within 100 m */
+.eggnote{flex-basis:100%;max-width:min(380px,calc(100vw - 24px));margin-inline-start:auto;background:var(--panel);border:1.5px solid var(--sun);border-radius:12px;
+  padding:10px 12px;box-shadow:var(--shadow);display:flex;gap:10px;align-items:flex-start;font-size:14px;line-height:1.45}
+.eggicon{flex:none;width:18px;height:22px}
+.egg{border:1.5px solid var(--sun);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;background:color-mix(in srgb,var(--sun) 9%,var(--panel))}
+.egg h3{margin:0;font-size:15px;display:flex;gap:8px;align-items:center}
+.egg blockquote{margin:0;font-size:17px;font-weight:600;text-wrap:pretty;overflow-wrap:anywhere}
+.egg cite{font-style:normal;color:var(--muted);font-size:13px;margin-top:-4px}
+.egg form{display:flex;flex-direction:column;gap:8px}
+.egg input{font:inherit;padding:10px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);min-width:0}
+.egg input:focus-visible{outline:3px solid var(--sun);outline-offset:1px}
+.egg p{margin:0}
 
 .loading{position:fixed;inset:0;z-index:20;display:grid;place-items:center;background:color-mix(in srgb,var(--plaster) 85%,transparent);font-weight:600}
 .spin{width:34px;height:34px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:sp 1s linear infinite;margin:0 auto 10px}
@@ -141,6 +153,7 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
   <div class="chip"><span class="k">סיבוב</span><span class="v" id="roundNum">1/5</span></div>
   <div class="chip"><span class="k">ניקוד</span><span class="v" id="total">0</span></div>
   <button class="chip iconbtn" id="backStart" type="button" hidden>חזרה לנקודת ההתחלה</button>
+  <div class="eggnote" id="eggNote" hidden><svg class="eggicon" viewBox="0 0 20 24" aria-hidden="true"><path d="M10 1C5 1 1 9 1 14.5 1 19.7 5 23 10 23s9-3.3 9-8.5C19 9 15 1 10 1z" style="fill:var(--sun);stroke:var(--ink)" stroke-width="1.5"/></svg><div id="eggNoteText"></div></div>
 </div>
 
 <div class="guessbox" id="guessbox" hidden>
@@ -179,6 +192,7 @@ th{font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.06em}
       <div class="legend"><span><span class="dot" style="background:var(--accent)"></span>הניחוש שלכם</span><span><span class="dot" style="background:var(--sun);border:2px solid var(--ink)"></span>המקום האמיתי</span></div>
       <a id="rLink" href="#" target="_blank" rel="noopener">פתיחה במפות Google</a>
     </div>
+    <div class="egg" id="eggBox" hidden></div>
     <button class="btn primary" id="nextBtn" type="button">לסיבוב הבא</button>
   </div>
 </section>
@@ -222,7 +236,12 @@ const CONFIG = {
     projectId: "tlv-guesser",
     appId: "1:776729510310:web:1617ce2a052ac297a80f67"
   },
-  LEADERBOARD_SIZE: 100
+  LEADERBOARD_SIZE: 100,
+  // איסטר אגס: מי שמנחש עד EGG_LEAVE_M מטר יכול להשאיר מסר במקום
+  EGG_LEAVE_M: 100,
+  EGG_REVEAL_M: 300,             // כמה קרוב צריך לנחש כדי לקרוא מסר שמישהו השאיר
+  EGG_CHANCE: 0.6,               // הסיכוי שבמשחק יהיה סיבוב ביצה אחד
+  EGG_FETCH: 60                  // כמה מסרים אחרונים לטעון כשיש סיבוב ביצה
 };
 
 // ===================== אנליטיקס =====================
@@ -262,7 +281,7 @@ function haversine(a,b){const R=6371000,r=x=>x*Math.PI/180;const dl=r(b.lat-a.la
   const h=Math.sin(dl/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
 function toast(msg,ms=4500){const t=$('toast');t.textContent=msg;t.hidden=false;clearTimeout(toast._t);toast._t=setTimeout(()=>t.hidden=true,ms)}
 function loading(on,text){$('loading').hidden=!on;if(text)$('loadingText').textContent=text}
-function showScreen(id){['start','result','summary'].forEach(s=>$(s).hidden=s!==id);const playing=!id;$('hud').hidden=!playing;$('guessbox').hidden=!playing}
+function showScreen(id){['start','result','summary'].forEach(s=>$(s).hidden=s!==id);const playing=!id;$('hud').hidden=!playing;$('guessbox').hidden=!playing;$('eggNote').hidden=!playing||!(game&&game.cur&&game.cur.eggs&&game.cur.eggs.length)}
 
 // מונה יומי בדפדפן
 const today=()=>new Date().toLocaleDateString('en-CA');
@@ -372,15 +391,17 @@ async function startGame(){
   loading(true,'טוען את Google Street View…');
   try{await ensureGoogle()}catch(e){return fatal('לא הצלחתי לטעון את Google Maps. בדקו את החיבור לאינטרנט ואת המפתח.','load')}
   if(!gmap)initGuessMap();
-  game={i:0,results:[],total:0,cur:null,mode:moveAllowed()?'move':'still'};
+  game={i:0,results:[],total:0,cur:null,mode:moveAllowed()?'move':'still',
+    eggRound:lbOn()&&Math.random()<CONFIG.EGG_CHANCE?Math.floor(Math.random()*CONFIG.ROUNDS):-1};
   track('game_start',{mode:game.mode});
   nextRound();
 }
 async function nextRound(){
   if(remaining()<=0){track('daily_limit_reached');loading(false);toast('נגמרו התמונות להיום בדפדפן הזה.');return game.results.length?summary():(showScreen('start'),renderQuota())}
   loading(true,'מחפש נקודה בעיר…');
-  let loc;
-  try{loc=await findLocation(game.results.map(r=>r.loc))}
+  let loc=null;
+  if(game.i===game.eggRound)loc=await pickEggLocation(game.results.map(r=>r.loc));
+  if(!loc)try{loc=await findLocation(game.results.map(r=>r.loc))}
   catch(e){
     const code=e.message;
     const why=code==='REQUEST_DENIED'?'Google דחתה את הבקשה. בדקו שהכתובת של האתר (כולל http:// אם אין עדיין HTTPS) מורשית במגבלות המפתח.'
@@ -391,6 +412,12 @@ async function nextRound(){
   }
   if(!loc)return fatal(`לא מצאתי תמונת רחוב אחרי ${CONFIG.MAX_TRIES} ניסיונות. נסו שוב. (סטטוס אחרון: ${lastStatus})`,'no_location');
   bumpUsage();game.cur=loc;
+  { const mine=new Set(myEggs()); loc.eggs=eggsNear(loc,eggCache||[]).filter(e=>!mine.has(e.id)); }
+  if(loc.eggs.length){
+    const n=loc.eggs.length;
+    $('eggNoteText').innerHTML=`${n===1?`<b>${esc(loc.eggs[0].name)}</b> כבר היה כאן`:`<b>${n} שחקנים</b> כבר היו כאן`} והשאיר${n>1?'ו':''} מסר. נחשו עד ${fmt(CONFIG.EGG_REVEAL_M)} מטר כדי לקרוא אותו.`;
+    track('egg_round',{round:game.i+1,count:n});
+  }
   track('panorama_load',{round:game.i+1,mode:game.mode,lookups:loc.tries,lookup_method:metaViaFetch?'metadata':'service'});
   showPano(loc);
   guess=null;if(gMarker){gMarker.remove();gMarker=null}
@@ -409,6 +436,7 @@ function makeGuess(){
   $('total').textContent=fmt(game.total);
   $('rDist').textContent=fmtD(d);$('rPts').textContent=`+${fmt(pts)} נקודות`;
   $('rLink').href=`https://www.google.com/maps/@?api=1&map_action=pano&pano=${encodeURIComponent(loc.pano)}`;
+  renderEggBox(loc,d);
   $('nextBtn').textContent=game.i+1<CONFIG.ROUNDS?'לסיבוב הבא':'לסיכום';
   $('rMeter').style.width='0';
   showScreen('result');
@@ -488,6 +516,81 @@ async function submitScore(ev){
   }catch(e){
     console.warn('leaderboard submit failed',e);$('submitBtn').disabled=false;
     $('submitMsg').textContent='השמירה נכשלה. נסו שוב.';$('submitMsg').hidden=false;
+  }
+}
+
+// ===================== איסטר אגס (Firestore: eggs) =====================
+const EGG_SVG='<svg class="eggicon" viewBox="0 0 20 24" aria-hidden="true"><path d="M10 1C5 1 1 9 1 14.5 1 19.7 5 23 10 23s9-3.3 9-8.5C19 9 15 1 10 1z" style="fill:var(--sun);stroke:var(--ink)" stroke-width="1.5"/></svg>';
+let eggCache=null;
+const readList=k=>{try{return JSON.parse(localStorage.getItem(k)||'[]')}catch(e){return []}};
+const writeList=(k,a)=>{try{localStorage.setItem(k,JSON.stringify(a.slice(-500)))}catch(e){}};
+const seenEggs=()=>readList('tlvg-eggs-seen'), myEggs=()=>readList('tlvg-eggs-mine');
+const markEggs=ids=>writeList('tlvg-eggs-seen',[...new Set([...seenEggs(),...ids])]);
+const eggsNear=(loc,list,r=60)=>list.filter(e=>typeof e.lat==='number'&&haversine(e,loc)<=r);
+async function loadEggs(){
+  if(!lbOn())return [];
+  if(eggCache)return eggCache;
+  try{
+    const {db,fs}=await ensureFB();
+    const snap=await fs.getDocs(fs.query(fs.collection(db,'eggs'),fs.orderBy('createdAt','desc'),fs.limit(CONFIG.EGG_FETCH)));
+    eggCache=snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch(e){console.warn('eggs load failed',e);eggCache=[]}
+  return eggCache;
+}
+// סיבוב ביצה: נוחתים במקום שמישהו השאיר בו מסר ועוד לא נקרא בדפדפן הזה
+async function pickEggLocation(avoid){
+  const all=await loadEggs(),seen=new Set(seenEggs()),mine=new Set(myEggs());
+  const cands=all.filter(e=>e.pano&&!seen.has(e.id)&&!mine.has(e.id)&&!avoid.some(a=>haversine(a,e)<300));
+  if(!cands.length)return null;
+  const e=cands[Math.floor(Math.random()*cands.length)];
+  if(metaViaFetch){ // בדיקה חינמית שהפנורמה עדיין קיימת
+    try{
+      const j=await withTimeout(fetch(`https://maps.googleapis.com/maps/api/streetview/metadata?pano=${encodeURIComponent(e.pano)}&key=${encodeURIComponent(KEY)}`).then(r=>r.json()),6000);
+      if(j.status==='OK')return {pano:j.pano_id,lat:j.location.lat,lng:j.location.lng,copy:j.copyright||'',tries:0};
+      if(j.status==='ZERO_RESULTS'||j.status==='NOT_FOUND'){markEggs([e.id]);return null}
+    }catch(err){}
+  }
+  return {pano:e.pano,lat:e.lat,lng:e.lng,copy:'Google',tries:0};
+}
+function renderEggBox(loc,d){
+  const here=loc.eggs||[];let html='';
+  if(here.length){
+    const n=here.length;
+    if(d<=CONFIG.EGG_REVEAL_M){
+      markEggs(here.map(e=>e.id));track('egg_revealed',{count:n});
+      html+=`<h3>${EGG_SVG}${n>1?'מסרים שהושארו כאן':'מסר שהושאר כאן'}</h3>`+
+        here.map(e=>`<blockquote>${esc(e.message)}</blockquote><cite>${esc(e.name)}, שניחש ${fmtD(e.dist||0)} מהמקום</cite>`).join('');
+    }else{
+      html+=`<h3>${EGG_SVG}המסר נשאר נעול</h3><p class="quota">${esc(here[0].name)}${n>1?` ועוד ${n-1}`:''} השאיר${n>1?'ו':''} כאן מסר. צריך לנחש עד ${fmt(CONFIG.EGG_REVEAL_M)} מטר כדי לקרוא אותו.</p>`;
+    }
+  }
+  if(lbOn()&&d<=CONFIG.EGG_LEAVE_M){
+    let nm='';try{nm=localStorage.getItem('tlvg-name')||''}catch(e){}
+    html+=`<h3>${EGG_SVG}ניחשתם בול! השאירו כאן מסר</h3><p class="quota">מי שינחת כאן בעתיד וינחש קרוב יוכל לקרוא אותו.</p>
+      <form id="eggForm"><input id="eggName" maxlength="20" placeholder="השם שלכם" value="${esc(nm)}" aria-label="השם שלכם" autocomplete="nickname">
+      <input id="eggMsg" maxlength="80" placeholder="המסר שלכם, עד 80 תווים" aria-label="המסר שלכם"><button class="btn" id="eggBtn" type="submit">הטמנת המסר</button></form>
+      <p class="quota" id="eggStatus" hidden></p>`;
+  }
+  $('eggBox').innerHTML=html;$('eggBox').hidden=!html;
+  const f=$('eggForm');if(f)f.addEventListener('submit',ev=>leaveEgg(ev,loc,d));
+}
+async function leaveEgg(ev,loc,d){
+  ev.preventDefault();
+  const name=$('eggName').value.replace(/\s+/g,' ').trim().slice(0,20);
+  const message=$('eggMsg').value.replace(/\s+/g,' ').trim().slice(0,80);
+  if(!name)return $('eggName').focus();
+  if(!message)return $('eggMsg').focus();
+  try{localStorage.setItem('tlvg-name',name)}catch(e){}
+  $('eggBtn').disabled=true;
+  try{
+    const {db,fs}=await ensureFB();
+    const ref=await fs.addDoc(fs.collection(db,'eggs'),{name,message,pano:loc.pano,lat:loc.lat,lng:loc.lng,dist:Math.round(d),createdAt:fs.serverTimestamp()});
+    writeList('tlvg-eggs-mine',[...myEggs(),ref.id]);
+    $('eggForm').hidden=true;$('eggStatus').textContent='המסר הוטמן. מי שינחת כאן וינחש קרוב יגלה אותו.';$('eggStatus').hidden=false;
+    track('egg_left',{distance_m:Math.round(d)});
+  }catch(e){
+    console.warn('egg save failed',e);$('eggBtn').disabled=false;
+    $('eggStatus').textContent='השמירה נכשלה. נסו שוב.';$('eggStatus').hidden=false;
   }
 }
 
