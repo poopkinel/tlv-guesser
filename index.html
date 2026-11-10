@@ -91,7 +91,7 @@ body{background:var(--plaster);color:var(--ink);font-family:var(--body);font-siz
 .err{color:var(--danger);font-weight:600;margin:0}
 
 .screen.mapped{display:grid;grid-template-rows:minmax(0,1fr) auto;padding:0}
-.screen.mapped .bigmap{min-height:0}
+.screen.mapped .bigmap{min-height:0;align-self:stretch;justify-self:stretch}
 .screen.mapped .card{margin:0 auto;width:min(620px,100%);border-radius:16px 16px 0 0;border-bottom:0;max-height:48vh;
   padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}
 .dist{font-family:var(--display);font-size:64px;line-height:.9;font-variant-numeric:tabular-nums}
